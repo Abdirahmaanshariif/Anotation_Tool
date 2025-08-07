@@ -4,7 +4,7 @@ const Users = require("../models/usersModel");
 const jwt = require("jsonwebtoken");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
-const { authenticateToken, authorizeRoles } = require("./auth")
+const { authenticateToken, authorizeRoles } = require("../utils/auth")
 require('dotenv').config();
 router.get('/usersAll',
   authenticateToken,
@@ -96,7 +96,7 @@ router.post("/login", async (req, res) => {
         userType: user.userType,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: "7d" }
     );
 
     const userData = {

@@ -2,7 +2,7 @@
 const express = require("express");
 const router = express.Router();
 const Progress = require("../models/progresModel");
-const { authenticateToken } = require("./auth");
+const { authenticateToken } = require("../utils/auth");
 
 // 1) Save progress
 router.post("/", authenticateToken, async (req, res) => {

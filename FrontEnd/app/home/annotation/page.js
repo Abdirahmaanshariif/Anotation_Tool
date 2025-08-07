@@ -37,8 +37,11 @@ const Annotation = () => {
   const [showTagged, setShowTagged] = useState(false);
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [skiping, setSkipping] = useState(false);
+
   const [selectedSourceText, setSelectedSourceText] = useState("");
   const [pendingTargetText, setPendingTargetText] = useState("");
+  const [pendingTargetRange, setPendingTargetRange] = useState(null);
   const [showCategoryOptions, setShowCategoryOptions] = useState(false);
 
   const [selectionPosition, setSelectionPosition] = useState({
@@ -97,9 +100,7 @@ const Annotation = () => {
   useEffect(() => {
     const fetchItems = async () => {
       try {
-        const res = await fetch(
-          "https://anotationtool-production.up.railway.app/api/data/annotation"
-        );
+        const res = await fetch("https://anotationtool-production.up.railway.app/api/data/annotation");
         if (!res.ok) throw new Error("Network error");
 
         const data = await res.json();
@@ -144,14 +145,11 @@ const Annotation = () => {
       const token = localStorage.getItem("token");
 
       try {
-        const res = await fetch(
-          "https://anotationtool-production.up.railway.app/api/progress",
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
+        const res = await fetch("https://anotationtool-production.up.railway.app/api/progress", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
 
         const data = await res.json();
         if (data.index !== undefined && !isNaN(data.index)) {
@@ -267,17 +265,14 @@ const Annotation = () => {
         setCurrentIndex(next);
 
         // 7) Persist progress to backend
-        await fetch(
-          "https://anotationtool-production.up.railway.app/api/progress",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ index: next }),
-          }
-        );
+        await fetch("https://anotationtool-production.up.railway.app/api/progress", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ index: next }),
+        });
       } else {
         alert("🎉 You've completed all annotations!");
       }
@@ -293,8 +288,8 @@ const Annotation = () => {
     }
   };
   const handleSkip = async () => {
-    if (submitting) return;
-    setSubmitting(true);
+    if (skiping) return;
+    setSkipping(true);
 
     try {
       const token = localStorage.getItem("token");
@@ -312,17 +307,14 @@ const Annotation = () => {
         return;
       }
 
-      const res = await fetch(
-        "https://anotationtool-production.up.railway.app/api/annotation/skip",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ Src_Text }),
-        }
-      );
+      const res = await fetch("https://anotationtool-production.up.railway.app/api/annotation/skip", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ Src_Text }),
+      });
 
       if (!res.ok) {
         const text = await res.text();
@@ -341,17 +333,14 @@ const Annotation = () => {
       if (next !== null) {
         setCurrentIndex(next);
 
-        const progressRes = await fetch(
-          "https://anotationtool-production.up.railway.app/api/progress",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ index: next }),
-          }
-        );
+        const progressRes = await fetch("https://anotationtool-production.up.railway.app/api/progress", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ index: next }),
+        });
 
         if (!progressRes.ok) {
           console.warn("Failed to save skip progress.");
@@ -365,9 +354,9 @@ const Annotation = () => {
       clearSelections();
     } catch (err) {
       console.error("Unexpected skip error:", err);
-      alert("Something went wrong while skipping. Please try again later.");
+      alert("Something went wrong while skiping. Please try again later.");
     } finally {
-      setSubmitting(false);
+      setSkipping(false);
     }
   };
   useEffect(() => {
@@ -422,25 +411,34 @@ const Annotation = () => {
   };
   const getTaggedText = (txt, sels) => {
     if (!sels.length) return txt;
-    let out = "",
-      idx = 0;
+
     const tagMap = {
       Addition: "a",
       Untranslation: "u",
       Mistranslation: "m",
       Omission: "o",
     };
-    sels.forEach((s) => {
-      const i = txt.indexOf(s.text, idx);
-      if (i === -1) return;
-      out +=
-        txt.slice(idx, i) +
-        `<${tagMap[s.category || "Omission"]}>${s.text}</${
-          tagMap[s.category || "Omission"]
-        }>`;
-      idx = i + s.text.length;
+
+    const sorted = [...sels].sort((a, b) => a.start - b.start);
+
+    let out = "";
+    let idx = 0;
+
+    sorted.forEach((s) => {
+      if (
+        typeof s.start !== "number" ||
+        typeof s.end !== "number" ||
+        s.start < idx
+      )
+        return;
+
+      const tag = tagMap[s.category || "Omission"];
+      out += txt.slice(idx, s.start); // untagged part
+      out += `<${tag}>${txt.slice(s.start, s.end)}</${tag}>`;
+      idx = s.end;
     });
-    out += txt.slice(idx);
+
+    out += txt.slice(idx); // any trailing untagged text
     return out;
   };
 
@@ -467,6 +465,181 @@ const Annotation = () => {
     setShowCategoryOptions(false);
   };
 
+  // const handleSelection = (
+  //   setSelections,
+  //   text,
+  //   category = null,
+  //   ref = null
+  // ) => {
+  //   try {
+  //     const selection = window.getSelection();
+  //     if (!selection || selection.rangeCount === 0) return;
+
+  //     const selectedText = selection.toString().trim();
+  //     if (!selectedText || !ref?.current?.textContent?.includes(selectedText)) {
+  //       selection.removeAllRanges();
+  //       return;
+  //     }
+
+  //     // 1. Estimate selection start index using DOM range
+  //     const range = selection.getRangeAt(0);
+  //     const preRange = document.createRange();
+  //     preRange.selectNodeContents(ref.current);
+  //     preRange.setEnd(range.startContainer, range.startOffset);
+  //     const approxStart = preRange.toString().length;
+
+  //     // 2. Find all occurrences of the selected text
+  //     const content = ref.current.textContent;
+  //     const occurrences = [];
+  //     let idx = content.indexOf(selectedText);
+  //     while (idx !== -1) {
+  //       occurrences.push(idx);
+  //       idx = content.indexOf(selectedText, idx + 1);
+  //     }
+
+  //     // 3. Pick the closest match to where the user selected
+  //     if (occurrences.length === 0) {
+  //       selection.removeAllRanges();
+  //       return;
+  //     }
+
+  //     const start = occurrences.reduce((prev, curr) =>
+  //       Math.abs(curr - approxStart) < Math.abs(prev - approxStart)
+  //         ? curr
+  //         : prev
+  //     );
+  //     const end = start + selectedText.length;
+
+  //     if (start < 0 || end > content.length) {
+  //       selection.removeAllRanges();
+  //       return;
+  //     }
+
+  //     // 4. Handle category menu (for target selections)
+  //     if (setSelections === setTargetSelections) {
+  //       setPendingTargetText(selectedText);
+  //       setShowCategoryOptions(true);
+  //       const rect = range.getBoundingClientRect();
+  //       setSelectionPosition({
+  //         top: rect.bottom + window.scrollY + 10,
+  //         left: rect.left + window.scrollX,
+  //       });
+  //       selection.removeAllRanges();
+  //       return;
+  //     }
+
+  //     // 5. Update selection state
+  //     setSelections((prev) => {
+  //       const isMistranslation = category === "Mistranslation";
+
+  //       // Deselect existing selection
+  //       const matchIndex = prev.findIndex(
+  //         (s) =>
+  //           s.start === start &&
+  //           s.end === end &&
+  //           s.text === selectedText &&
+  //           s.category === category
+  //       );
+
+  //       if (matchIndex !== -1) {
+  //         if (isMistranslation) {
+  //           const linkedTargetText = prev[matchIndex].linkedTargetText;
+  //           setTargetSelections((targetPrev) =>
+  //             targetPrev.filter(
+  //               (t) =>
+  //                 t.text !== linkedTargetText || t.category !== "Mistranslation"
+  //             )
+  //           );
+  //         }
+  //         return prev.filter((_, i) => i !== matchIndex); // Deselect
+  //       }
+
+  //       // Prevent overlapping selections
+  //       const overlaps = prev.some(
+  //         ({ start: sStart, end: sEnd }) => start < sEnd && end > sStart
+  //       );
+  //       if (overlaps) return prev;
+
+  //       // Add new selection
+  //       return [...prev, { text: selectedText, category, start, end }];
+  //     });
+
+  //     selection.removeAllRanges();
+  //   } catch (err) {
+  //     console.error("Error during text selection:", err);
+  //     window.getSelection()?.removeAllRanges();
+  //   }
+  // };
+
+  // const handleCategoryConfirm = (cat) => {
+  //   if (!pendingTargetText) return;
+
+  //   const start = targetText.indexOf(pendingTargetText);
+  //   const end = start + pendingTargetText.length;
+
+  //   const overlaps = targetSelections.some(
+  //     ({ text, start: sStart, end: sEnd }) => {
+  //       return text !== pendingTargetText && !(end <= sStart || start >= sEnd);
+  //     }
+  //   );
+
+  //   if (overlaps) {
+  //     alert(`"${pendingTargetText}" overlaps with another selection.`);
+  //     setPendingTargetText("");
+  //     setShowCategoryOptions(false);
+  //     return;
+  //   }
+
+  //   const existingIndex = targetSelections.findIndex(
+  //     (s) => s.text === pendingTargetText
+  //   );
+  //   if (existingIndex !== -1) {
+  //     const existing = targetSelections[existingIndex];
+  //     if (existing.category === cat) {
+  //       setTargetSelections((prev) =>
+  //         prev.filter((_, i) => i !== existingIndex)
+  //       );
+  //     } else if (cat === "Mistranslation") {
+  //       setTargetSelections((prev) =>
+  //         prev.filter((_, i) => i !== existingIndex)
+  //       );
+  //       setIsModalOpen(true);
+  //       setCurrentMistranslation({
+  //         text: pendingTargetText,
+  //         category: "Mistranslation",
+  //         start,
+  //         end,
+  //       });
+  //     } else {
+  //       const updated = [...targetSelections];
+  //       updated[existingIndex] = {
+  //         text: pendingTargetText,
+  //         category: cat,
+  //         start,
+  //         end,
+  //       };
+  //       setTargetSelections(updated);
+  //     }
+  //   } else {
+  //     if (cat === "Mistranslation") {
+  //       setIsModalOpen(true);
+  //       setCurrentMistranslation({
+  //         text: pendingTargetText,
+  //         category: "Mistranslation",
+  //         start,
+  //         end,
+  //       });
+  //     } else {
+  //       setTargetSelections((prev) => [
+  //         ...prev,
+  //         { text: pendingTargetText, category: cat, start, end },
+  //       ]);
+  //     }
+  //   }
+
+  //   setPendingTargetText("");
+  //   setShowCategoryOptions(false);
+  // };
   const handleSelection = (
     setSelections,
     text,
@@ -483,14 +656,12 @@ const Annotation = () => {
         return;
       }
 
-      // Calculate approximate start index via a pre-range
       const range = selection.getRangeAt(0);
       const preRange = document.createRange();
       preRange.selectNodeContents(ref.current);
       preRange.setEnd(range.startContainer, range.startOffset);
       const approxStart = preRange.toString().length;
 
-      // Find all occurrences of selectedText
       const content = ref.current.textContent;
       const occurrences = [];
       let idx = content.indexOf(selectedText);
@@ -499,13 +670,11 @@ const Annotation = () => {
         idx = content.indexOf(selectedText, idx + 1);
       }
 
-      // No valid occurrence found
       if (occurrences.length === 0) {
         selection.removeAllRanges();
         return;
       }
 
-      // Pick the occurrence closest to the approximate start
       const start = occurrences.reduce((prev, curr) =>
         Math.abs(curr - approxStart) < Math.abs(prev - approxStart)
           ? curr
@@ -513,15 +682,14 @@ const Annotation = () => {
       );
       const end = start + selectedText.length;
 
-      // Guard against out-of-bounds
       if (start < 0 || end > content.length) {
         selection.removeAllRanges();
         return;
       }
 
-      // Handle target selections with category popup
       if (setSelections === setTargetSelections) {
         setPendingTargetText(selectedText);
+        setPendingTargetRange({ start, end }); // ✅ Store exact range
         setShowCategoryOptions(true);
         const rect = range.getBoundingClientRect();
         setSelectionPosition({
@@ -532,9 +700,7 @@ const Annotation = () => {
         return;
       }
 
-      // Update selections state
       setSelections((prev) => {
-        const isMistranslation = category === "Mistranslation";
         const matchIndex = prev.findIndex(
           (s) =>
             s.start === start &&
@@ -543,27 +709,14 @@ const Annotation = () => {
             s.category === category
         );
 
-        // Deselect existing selection
         if (matchIndex !== -1) {
-          if (isMistranslation) {
-            const linkedTargetText = prev[matchIndex].linkedTargetText;
-            setTargetSelections((targetPrev) =>
-              targetPrev.filter(
-                (t) =>
-                  t.text !== linkedTargetText || t.category !== "Mistranslation"
-              )
-            );
-          }
           return prev.filter((_, i) => i !== matchIndex);
         }
 
-        // Prevent overlapping selections
         const overlaps = prev.some(
           ({ start: sStart, end: sEnd }) => start < sEnd && end > sStart
         );
-        if (overlaps) {
-          return prev;
-        }
+        if (overlaps) return prev;
 
         return [...prev, { text: selectedText, category, start, end }];
       });
@@ -574,22 +727,18 @@ const Annotation = () => {
       window.getSelection()?.removeAllRanges();
     }
   };
-
   const handleCategoryConfirm = (cat) => {
-    if (!pendingTargetText) return;
-
-    const start = targetText.indexOf(pendingTargetText);
-    const end = start + pendingTargetText.length;
+    if (!pendingTargetText || !pendingTargetRange) return;
+    const { start, end } = pendingTargetRange;
 
     const overlaps = targetSelections.some(
-      ({ text, start: sStart, end: sEnd }) => {
-        return text !== pendingTargetText && !(end <= sStart || start >= sEnd);
-      }
+      ({ text, start: sStart, end: sEnd }) =>
+        text !== pendingTargetText && !(end <= sStart || start >= sEnd)
     );
-
     if (overlaps) {
       alert(`"${pendingTargetText}" overlaps with another selection.`);
       setPendingTargetText("");
+      setPendingTargetRange(null);
       setShowCategoryOptions(false);
       return;
     }
@@ -642,6 +791,7 @@ const Annotation = () => {
     }
 
     setPendingTargetText("");
+    setPendingTargetRange(null); // ✅ Clear range after use
     setShowCategoryOptions(false);
   };
 
@@ -795,39 +945,41 @@ const Annotation = () => {
   const renderText = (text, selections) => {
     if (!selections.length) return text;
 
-    // 1. Map & sort
     const sorted = selections
       .map((sel) => ({
         ...sel,
-        start: text.indexOf(sel.text),
         ...getClassAndTooltip(sel),
       }))
-      .filter((s) => s.start !== -1)
+      .filter((s) => typeof s.start === "number" && typeof s.end === "number")
       .sort((a, b) => a.start - b.start);
 
-    // 2. Build your pieces
     const parts = [];
     let lastIndex = 0;
+
     sorted.forEach((s, i) => {
       if (s.start > lastIndex) {
         parts.push(
           <span key={`n-${i}`}>{text.slice(lastIndex, s.start)}</span>
         );
       }
+
       parts.push(
         <span
           key={`h-${i}`}
           className={`${s.colorClass} font-semibold tooltip tooltip-open tooltip-top`}
           data-tip={s.tooltipText}
         >
-          {s.text}
+          {text.slice(s.start, s.end)}
         </span>
       );
-      lastIndex = s.start + s.text.length;
+
+      lastIndex = s.end;
     });
+
     if (lastIndex < text.length) {
       parts.push(<span key="last">{text.slice(lastIndex)}</span>);
     }
+
     return parts;
   };
 
@@ -982,10 +1134,10 @@ const Annotation = () => {
           </p>
 
           {/* Meaning Slider */}
-          <div className="w-full px-4 sm:px-6 lg:px-8 py-4 space-y-6">
+          <div className="w-full px-4 sm:px-6 lg:px-8 py-4 space-y-4">
             {/* Slider Section */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 font-semibold gap-2 sm:gap-0">
-              <span className="text-sm sm:text-base text-center sm:text-left">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 font-semibold">
+              <span className="text-sm sm:text-base text-center sm:text-left mb-2 sm:mb-0">
                 strongly disagree
               </span>
 
@@ -1000,36 +1152,27 @@ const Annotation = () => {
                   onChange={handleChange}
                   className="range range-primary w-full dark:range-secondary"
                 />
-
                 <div className="absolute left-0 right-0 top-6 flex justify-between text-[10px] sm:text-xs text-gray-400 px-1">
                   <span
                     className="tooltip tooltip-open tooltip-bottom"
                     data-tip="Nonsense/No meaning preserved"
-                  >
-                    |
-                  </span>
+                  />
                   <span
                     className="tooltip tooltip-open tooltip-bottom"
                     data-tip="Some meaning preserved"
-                  >
-                    |
-                  </span>
+                  />
                   <span
                     className="tooltip tooltip-open tooltip-bottom"
                     data-tip="Most meaning preserved"
-                  >
-                    |
-                  </span>
+                  />
                   <span
                     className="tooltip tooltip-open tooltip-bottom"
                     data-tip="Perfect meaning"
-                  >
-                    |
-                  </span>
+                  />
                 </div>
               </div>
 
-              <span className="text-sm sm:text-base text-center sm:text-right">
+              <span className="text-sm sm:text-base text-center sm:text-right mt-2 sm:mt-0">
                 strongly agree
               </span>
             </div>
@@ -1038,7 +1181,7 @@ const Annotation = () => {
             <textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow rounded p-2 text-sm sm:text-base resize-none"
+              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow rounded p-2 mt-10 text-sm sm:text-base resize-none"
               placeholder="Please write any comment about the highlighted errors or annotation"
               rows={4}
             />
@@ -1046,31 +1189,37 @@ const Annotation = () => {
 
           {/* Submit Button */}
           <div className="w-full px-4 sm:px-6 lg:px-8 pb-4 flex flex-wrap justify-center gap-4">
+            {/* Submit Button */}
             <button
               onClick={handleSave}
               disabled={submitting}
-              className={`px-6 py-2 text-sm sm:text-base font-semibold rounded-md shadow transition-all 
+              className={`px-6 py-2 text-sm sm:text-base font-semibold rounded-md shadow transition-all duration-150
       ${
         submitting
           ? "bg-blue-400 cursor-not-allowed text-white"
           : "bg-blue-600 hover:bg-blue-700 text-white"
-      } 
-      dark:bg-blue-700 dark:hover:bg-blue-800 dark:disabled:bg-blue-500`}
+      }
+      dark:bg-blue-700 dark:hover:bg-blue-800 dark:disabled:bg-blue-500
+      focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-500
+    `}
             >
               {submitting ? "Submitting..." : "Submit"}
             </button>
 
+            {/* Skip Button */}
             <button
               onClick={handleSkip}
-              disabled={submitting}
-              className={`px-6 py-2 text-sm sm:text-base font-semibold rounded-md shadow transition-all 
+              disabled={skiping}
+              className={`px-6 py-2 text-sm sm:text-base font-semibold rounded-md shadow transition-all duration-150
       ${
-        submitting
+        skiping
           ? "bg-yellow-400 cursor-not-allowed text-white"
           : "bg-yellow-500 hover:bg-yellow-600 text-white"
-      }`}
+      }
+      focus:outline-none focus:ring-2 focus:ring-yellow-300 dark:focus:ring-yellow-500
+    `}
             >
-              Skip
+              {skiping ? "Skipping..." : "Skip"}
             </button>
           </div>
 

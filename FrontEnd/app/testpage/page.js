@@ -41,6 +41,7 @@ const Annotation = () => {
 
   const [selectedSourceText, setSelectedSourceText] = useState("");
   const [pendingTargetText, setPendingTargetText] = useState("");
+  const [pendingTargetRange, setPendingTargetRange] = useState(null);
   const [showCategoryOptions, setShowCategoryOptions] = useState(false);
 
   const [selectionPosition, setSelectionPosition] = useState({
@@ -72,7 +73,7 @@ const Annotation = () => {
       try {
         const token = localStorage.getItem("token");
         const res = await fetch(
-          `http://localhost:5000/api/annotation/Allannotation`,
+          `https://anotationtool-production.up.railway.app/api/annotation/Allannotation`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -99,7 +100,7 @@ const Annotation = () => {
   useEffect(() => {
     const fetchItems = async () => {
       try {
-        const res = await fetch("http://localhost:5000/api/data/annotation");
+        const res = await fetch("https://anotationtool-production.up.railway.app/api/data/annotation");
         if (!res.ok) throw new Error("Network error");
 
         const data = await res.json();
@@ -144,7 +145,7 @@ const Annotation = () => {
       const token = localStorage.getItem("token");
 
       try {
-        const res = await fetch("http://localhost:5000/api/progress", {
+        const res = await fetch("https://anotationtool-production.up.railway.app/api/progress", {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -223,7 +224,7 @@ const Annotation = () => {
 
       // 2) Save annotation to backend
       const res = await fetch(
-        "http://localhost:5000/api/annotation/Addannotation",
+        "https://anotationtool-production.up.railway.app/api/annotation/Addannotation",
         {
           method: "POST",
           headers: {
@@ -264,7 +265,7 @@ const Annotation = () => {
         setCurrentIndex(next);
 
         // 7) Persist progress to backend
-        await fetch("http://localhost:5000/api/progress", {
+        await fetch("https://anotationtool-production.up.railway.app/api/progress", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -306,7 +307,7 @@ const Annotation = () => {
         return;
       }
 
-      const res = await fetch("http://localhost:5000/api/annotation/skip", {
+      const res = await fetch("https://anotationtool-production.up.railway.app/api/annotation/skip", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -332,7 +333,7 @@ const Annotation = () => {
       if (next !== null) {
         setCurrentIndex(next);
 
-        const progressRes = await fetch("http://localhost:5000/api/progress", {
+        const progressRes = await fetch("https://anotationtool-production.up.railway.app/api/progress", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -410,25 +411,34 @@ const Annotation = () => {
   };
   const getTaggedText = (txt, sels) => {
     if (!sels.length) return txt;
-    let out = "",
-      idx = 0;
+
     const tagMap = {
       Addition: "a",
       Untranslation: "u",
       Mistranslation: "m",
       Omission: "o",
     };
-    sels.forEach((s) => {
-      const i = txt.indexOf(s.text, idx);
-      if (i === -1) return;
-      out +=
-        txt.slice(idx, i) +
-        `<${tagMap[s.category || "Omission"]}>${s.text}</${
-          tagMap[s.category || "Omission"]
-        }>`;
-      idx = i + s.text.length;
+
+    const sorted = [...sels].sort((a, b) => a.start - b.start);
+
+    let out = "";
+    let idx = 0;
+
+    sorted.forEach((s) => {
+      if (
+        typeof s.start !== "number" ||
+        typeof s.end !== "number" ||
+        s.start < idx
+      )
+        return;
+
+      const tag = tagMap[s.category || "Omission"];
+      out += txt.slice(idx, s.start); // untagged part
+      out += `<${tag}>${txt.slice(s.start, s.end)}</${tag}>`;
+      idx = s.end;
     });
-    out += txt.slice(idx);
+
+    out += txt.slice(idx); // any trailing untagged text
     return out;
   };
 
@@ -454,91 +464,7 @@ const Annotation = () => {
     setPendingTargetText("");
     setShowCategoryOptions(false);
   };
-  const handleSelection = (
-    setSelections,
-    text,
-    category = null,
-    ref = null
-  ) => {
-    try {
-      const selection = window.getSelection();
-      if (!selection || selection.rangeCount === 0) return;
 
-      const selectedText = selection.toString().trim();
-      if (!selectedText || !ref?.current?.textContent?.includes(selectedText)) {
-        selection.removeAllRanges();
-        return;
-      }
-
-      // Calculate approximate start index via a pre-range
-      const range = selection.getRangeAt(0);
-      const preRange = document.createRange();
-      preRange.selectNodeContents(ref.current);
-      preRange.setEnd(range.startContainer, range.startOffset);
-      const approxStart = preRange.toString().length;
-
-      // Find all occurrences of selectedText
-      const content = ref.current.textContent;
-      const occurrences = [];
-      let idx = content.indexOf(selectedText);
-      while (idx !== -1) {
-        occurrences.push(idx);
-        idx = content.indexOf(selectedText, idx + 1);
-      }
-
-      // No valid occurrence found
-      if (occurrences.length === 0) {
-        selection.removeAllRanges();
-        return;
-      }
-
-      // Pick the occurrence closest to the approximate start
-      const start = occurrences.reduce((prev, curr) =>
-        Math.abs(curr - approxStart) < Math.abs(prev - approxStart)
-          ? curr
-          : prev
-      );
-      const end = start + selectedText.length;
-
-      // Guard against out-of-bounds
-      if (start < 0 || end > content.length) {
-        selection.removeAllRanges();
-        return;
-      }
-
-      // Handle deselecting text if already selected
-      setSelections((prev) => {
-        const matchIndex = prev.findIndex(
-          (s) =>
-            s.start === start &&
-            s.end === end &&
-            s.text === selectedText &&
-            s.category === category
-        );
-
-        // If the text is already selected, deselect it
-        if (matchIndex !== -1) {
-          return prev.filter((_, i) => i !== matchIndex);
-        }
-
-        // Prevent overlapping selections
-        const overlaps = prev.some(
-          ({ start: sStart, end: sEnd }) => start < sEnd && end > sStart
-        );
-        if (overlaps) {
-          return prev;
-        }
-
-        // Add new selection
-        return [...prev, { text: selectedText, category, start, end }];
-      });
-
-      selection.removeAllRanges();
-    } catch (err) {
-      console.error("Error during text selection:", err);
-      window.getSelection()?.removeAllRanges();
-    }
-  };
   // const handleSelection = (
   //   setSelections,
   //   text,
@@ -555,14 +481,14 @@ const Annotation = () => {
   //       return;
   //     }
 
-  //     // Calculate approximate start index via a pre-range
+  //     // 1. Estimate selection start index using DOM range
   //     const range = selection.getRangeAt(0);
   //     const preRange = document.createRange();
   //     preRange.selectNodeContents(ref.current);
   //     preRange.setEnd(range.startContainer, range.startOffset);
   //     const approxStart = preRange.toString().length;
 
-  //     // Find all occurrences of selectedText
+  //     // 2. Find all occurrences of the selected text
   //     const content = ref.current.textContent;
   //     const occurrences = [];
   //     let idx = content.indexOf(selectedText);
@@ -571,13 +497,12 @@ const Annotation = () => {
   //       idx = content.indexOf(selectedText, idx + 1);
   //     }
 
-  //     // No valid occurrence found
+  //     // 3. Pick the closest match to where the user selected
   //     if (occurrences.length === 0) {
   //       selection.removeAllRanges();
   //       return;
   //     }
 
-  //     // Pick the occurrence closest to the approximate start
   //     const start = occurrences.reduce((prev, curr) =>
   //       Math.abs(curr - approxStart) < Math.abs(prev - approxStart)
   //         ? curr
@@ -585,13 +510,12 @@ const Annotation = () => {
   //     );
   //     const end = start + selectedText.length;
 
-  //     // Guard against out-of-bounds
   //     if (start < 0 || end > content.length) {
   //       selection.removeAllRanges();
   //       return;
   //     }
 
-  //     // Handle target selections with category popup
+  //     // 4. Handle category menu (for target selections)
   //     if (setSelections === setTargetSelections) {
   //       setPendingTargetText(selectedText);
   //       setShowCategoryOptions(true);
@@ -604,9 +528,11 @@ const Annotation = () => {
   //       return;
   //     }
 
-  //     // Update selections state
+  //     // 5. Update selection state
   //     setSelections((prev) => {
   //       const isMistranslation = category === "Mistranslation";
+
+  //       // Deselect existing selection
   //       const matchIndex = prev.findIndex(
   //         (s) =>
   //           s.start === start &&
@@ -615,7 +541,6 @@ const Annotation = () => {
   //           s.category === category
   //       );
 
-  //       // Deselect existing selection
   //       if (matchIndex !== -1) {
   //         if (isMistranslation) {
   //           const linkedTargetText = prev[matchIndex].linkedTargetText;
@@ -626,17 +551,16 @@ const Annotation = () => {
   //             )
   //           );
   //         }
-  //         return prev.filter((_, i) => i !== matchIndex);
+  //         return prev.filter((_, i) => i !== matchIndex); // Deselect
   //       }
 
   //       // Prevent overlapping selections
   //       const overlaps = prev.some(
   //         ({ start: sStart, end: sEnd }) => start < sEnd && end > sStart
   //       );
-  //       if (overlaps) {
-  //         return prev;
-  //       }
+  //       if (overlaps) return prev;
 
+  //       // Add new selection
   //       return [...prev, { text: selectedText, category, start, end }];
   //     });
 
@@ -647,21 +571,174 @@ const Annotation = () => {
   //   }
   // };
 
-  const handleCategoryConfirm = (cat) => {
-    if (!pendingTargetText) return;
+  // const handleCategoryConfirm = (cat) => {
+  //   if (!pendingTargetText) return;
 
-    const start = targetText.indexOf(pendingTargetText);
-    const end = start + pendingTargetText.length;
+  //   const start = targetText.indexOf(pendingTargetText);
+  //   const end = start + pendingTargetText.length;
+
+  //   const overlaps = targetSelections.some(
+  //     ({ text, start: sStart, end: sEnd }) => {
+  //       return text !== pendingTargetText && !(end <= sStart || start >= sEnd);
+  //     }
+  //   );
+
+  //   if (overlaps) {
+  //     alert(`"${pendingTargetText}" overlaps with another selection.`);
+  //     setPendingTargetText("");
+  //     setShowCategoryOptions(false);
+  //     return;
+  //   }
+
+  //   const existingIndex = targetSelections.findIndex(
+  //     (s) => s.text === pendingTargetText
+  //   );
+  //   if (existingIndex !== -1) {
+  //     const existing = targetSelections[existingIndex];
+  //     if (existing.category === cat) {
+  //       setTargetSelections((prev) =>
+  //         prev.filter((_, i) => i !== existingIndex)
+  //       );
+  //     } else if (cat === "Mistranslation") {
+  //       setTargetSelections((prev) =>
+  //         prev.filter((_, i) => i !== existingIndex)
+  //       );
+  //       setIsModalOpen(true);
+  //       setCurrentMistranslation({
+  //         text: pendingTargetText,
+  //         category: "Mistranslation",
+  //         start,
+  //         end,
+  //       });
+  //     } else {
+  //       const updated = [...targetSelections];
+  //       updated[existingIndex] = {
+  //         text: pendingTargetText,
+  //         category: cat,
+  //         start,
+  //         end,
+  //       };
+  //       setTargetSelections(updated);
+  //     }
+  //   } else {
+  //     if (cat === "Mistranslation") {
+  //       setIsModalOpen(true);
+  //       setCurrentMistranslation({
+  //         text: pendingTargetText,
+  //         category: "Mistranslation",
+  //         start,
+  //         end,
+  //       });
+  //     } else {
+  //       setTargetSelections((prev) => [
+  //         ...prev,
+  //         { text: pendingTargetText, category: cat, start, end },
+  //       ]);
+  //     }
+  //   }
+
+  //   setPendingTargetText("");
+  //   setShowCategoryOptions(false);
+  // };
+  const handleSelection = (
+    setSelections,
+    text,
+    category = null,
+    ref = null
+  ) => {
+    try {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+
+      const selectedText = selection.toString().trim();
+      if (!selectedText || !ref?.current?.textContent?.includes(selectedText)) {
+        selection.removeAllRanges();
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const preRange = document.createRange();
+      preRange.selectNodeContents(ref.current);
+      preRange.setEnd(range.startContainer, range.startOffset);
+      const approxStart = preRange.toString().length;
+
+      const content = ref.current.textContent;
+      const occurrences = [];
+      let idx = content.indexOf(selectedText);
+      while (idx !== -1) {
+        occurrences.push(idx);
+        idx = content.indexOf(selectedText, idx + 1);
+      }
+
+      if (occurrences.length === 0) {
+        selection.removeAllRanges();
+        return;
+      }
+
+      const start = occurrences.reduce((prev, curr) =>
+        Math.abs(curr - approxStart) < Math.abs(prev - approxStart)
+          ? curr
+          : prev
+      );
+      const end = start + selectedText.length;
+
+      if (start < 0 || end > content.length) {
+        selection.removeAllRanges();
+        return;
+      }
+
+      if (setSelections === setTargetSelections) {
+        setPendingTargetText(selectedText);
+        setPendingTargetRange({ start, end }); // ✅ Store exact range
+        setShowCategoryOptions(true);
+        const rect = range.getBoundingClientRect();
+        setSelectionPosition({
+          top: rect.bottom + window.scrollY + 10,
+          left: rect.left + window.scrollX,
+        });
+        selection.removeAllRanges();
+        return;
+      }
+
+      setSelections((prev) => {
+        const matchIndex = prev.findIndex(
+          (s) =>
+            s.start === start &&
+            s.end === end &&
+            s.text === selectedText &&
+            s.category === category
+        );
+
+        if (matchIndex !== -1) {
+          return prev.filter((_, i) => i !== matchIndex);
+        }
+
+        const overlaps = prev.some(
+          ({ start: sStart, end: sEnd }) => start < sEnd && end > sStart
+        );
+        if (overlaps) return prev;
+
+        return [...prev, { text: selectedText, category, start, end }];
+      });
+
+      selection.removeAllRanges();
+    } catch (err) {
+      console.error("Error during text selection:", err);
+      window.getSelection()?.removeAllRanges();
+    }
+  };
+  const handleCategoryConfirm = (cat) => {
+    if (!pendingTargetText || !pendingTargetRange) return;
+    const { start, end } = pendingTargetRange;
 
     const overlaps = targetSelections.some(
-      ({ text, start: sStart, end: sEnd }) => {
-        return text !== pendingTargetText && !(end <= sStart || start >= sEnd);
-      }
+      ({ text, start: sStart, end: sEnd }) =>
+        text !== pendingTargetText && !(end <= sStart || start >= sEnd)
     );
-
     if (overlaps) {
       alert(`"${pendingTargetText}" overlaps with another selection.`);
       setPendingTargetText("");
+      setPendingTargetRange(null);
       setShowCategoryOptions(false);
       return;
     }
@@ -714,6 +791,7 @@ const Annotation = () => {
     }
 
     setPendingTargetText("");
+    setPendingTargetRange(null); // ✅ Clear range after use
     setShowCategoryOptions(false);
   };
 
@@ -867,39 +945,41 @@ const Annotation = () => {
   const renderText = (text, selections) => {
     if (!selections.length) return text;
 
-    // 1. Map & sort
     const sorted = selections
       .map((sel) => ({
         ...sel,
-        start: text.indexOf(sel.text),
         ...getClassAndTooltip(sel),
       }))
-      .filter((s) => s.start !== -1)
+      .filter((s) => typeof s.start === "number" && typeof s.end === "number")
       .sort((a, b) => a.start - b.start);
 
-    // 2. Build your pieces
     const parts = [];
     let lastIndex = 0;
+
     sorted.forEach((s, i) => {
       if (s.start > lastIndex) {
         parts.push(
           <span key={`n-${i}`}>{text.slice(lastIndex, s.start)}</span>
         );
       }
+
       parts.push(
         <span
           key={`h-${i}`}
           className={`${s.colorClass} font-semibold tooltip tooltip-open tooltip-top`}
           data-tip={s.tooltipText}
         >
-          {s.text}
+          {text.slice(s.start, s.end)}
         </span>
       );
-      lastIndex = s.start + s.text.length;
+
+      lastIndex = s.end;
     });
+
     if (lastIndex < text.length) {
       parts.push(<span key="last">{text.slice(lastIndex)}</span>);
     }
+
     return parts;
   };
 
